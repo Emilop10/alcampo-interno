@@ -5,6 +5,11 @@
   --foreground: #171717;
 }
 
+/* Fuerza esquema claro del navegador (formularios/scrollbars/tooltips) */
+html {
+  color-scheme: light;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -12,12 +17,7 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/* ✅ Eliminado el @media (prefers-color-scheme: dark) */
 
 body {
   background: var(--background);
