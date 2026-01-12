@@ -41,7 +41,28 @@ function parseFactorInput(text: string) {
 function normalizeFactorText(text: string) {
   const n = parseFactorInput(text);
   const fixed = fixFactor(isFinite(n) ? n : 1.7);
-  return fixed.toFixed(4); // puedes cambiar a 2 si quieres (ej. 1.70)
+  return fixed.toFixed(4);
+}
+
+/**
+ * Sanea el texto mientras escribe:
+ * - permite dígitos
+ * - permite un solo punto decimal
+ * - convierte coma a punto
+ * - NO aplica fixFactor aquí (para no romper el tecleo)
+ */
+function sanitizeFactorText(text: string) {
+  let t = (text ?? '').replace(',', '.').replace(/[^\d.]/g, '');
+  const firstDot = t.indexOf('.');
+  if (firstDot !== -1) {
+    t = t.slice(0, firstDot + 1) + t.slice(firstDot + 1).replace(/\./g, '');
+  }
+  return t;
+}
+
+function selectAllOnFocus(e: React.FocusEvent<HTMLInputElement>) {
+  // Selecciona todo al enfocar, así es más fácil reemplazar rápido
+  requestAnimationFrame(() => e.target.select());
 }
 
 export default function FinanceDailyPage() {
@@ -70,7 +91,7 @@ export default function FinanceDailyPage() {
   const [salesCom, setSalesCom] = useState<number>(0);
   const [salesImp, setSalesImp] = useState<number>(0);
 
-  // ✅ Factores editables como TEXTO (para poder escribir decimales sin que se borren)
+  // ✅ Factores editables como TEXTO
   const [fCInput, setFCInput] = useState<string>('1.7000');
   const [fComInput, setFComInput] = useState<string>('1.8200');
   const [fImpInput, setFImpInput] = useState<string>('1.5300');
@@ -91,6 +112,7 @@ export default function FinanceDailyPage() {
         const fams = (data || []) as Family[];
         setFamilies(fams);
         const map = new Map(fams.map(f => [f.key, f.factor]));
+
         if (map.has('CARTUCHOS')) setFCInput(fixFactor(Number(map.get('CARTUCHOS'))).toFixed(4));
         if (map.has('COMERCIALES')) setFComInput(fixFactor(Number(map.get('COMERCIALES'))).toFixed(4));
         if (map.has('IMPORTADOS')) setFImpInput(fixFactor(Number(map.get('IMPORTADOS'))).toFixed(4));
@@ -101,9 +123,15 @@ export default function FinanceDailyPage() {
 
   // Cálculos por familia
   const lines: Line[] = useMemo(() => {
-    const fCNum = fixFactor(parseFactorInput(fCInput));
-    const fComNum = fixFactor(parseFactorInput(fComInput));
-    const fImpNum = fixFactor(parseFactorInput(fImpInput));
+    // Importante: para cálculos convertimos texto -> número; si está incompleto ("1.") parseFactorInput devuelve 1 (ok)
+    // y si está vacío o "." devuelve NaN, ahí usamos 1 para no romper división.
+    const rawFC = parseFactorInput(fCInput);
+    const rawFCom = parseFactorInput(fComInput);
+    const rawFImp = parseFactorInput(fImpInput);
+
+    const fCNum = fixFactor(isFinite(rawFC) ? rawFC : 1.7);
+    const fComNum = fixFactor(isFinite(rawFCom) ? rawFCom : 1.7);
+    const fImpNum = fixFactor(isFinite(rawFImp) ? rawFImp : 1.7);
 
     const L: Line[] = [
       { family_key: 'CARTUCHOS',   sales: salesC,   factor: fCNum,   providers: 0, go_base: 0 },
@@ -152,14 +180,12 @@ export default function FinanceDailyPage() {
     };
   }, [lines, cardsDay, cards, vouchers, cardFees]);
 
-  // Helpers para limpiar formulario
   function resetDayForm() {
     setCash(0); setCardsDay(0); setCards(0); setClientDeps(0);
     setVouchers(0); setCardFees(0); setNotes('');
     setSalesC(0); setSalesCom(0); setSalesImp(0);
   }
 
-  // ---------- Cargar corte por fecha ----------
   async function loadDayData(d: string) {
     try {
       setMsg('');
@@ -177,7 +203,6 @@ export default function FinanceDailyPage() {
 
       setDayId(dayRow.id);
 
-      // Rellena entradas y totales guardados
       setCash(Number(dayRow.cash_mxn || 0));
       setCards(Number(dayRow.cards_mxn || 0));
       setClientDeps(Number(dayRow.client_deposits_mxn || 0));
@@ -187,7 +212,6 @@ export default function FinanceDailyPage() {
       const t = dayRow.totals || {};
       setCardsDay(Number(t.cards_day || 0));
 
-      // 2) Líneas por familia
       const { data: lineRows } = await supabase
         .from('finance_day_lines')
         .select('family_key,sales_mxn,factor')
@@ -211,10 +235,8 @@ export default function FinanceDailyPage() {
     }
   }
 
-  // Cargar automáticamente al cambiar la fecha
   useEffect(() => { if (day) loadDayData(day); }, [day]);
 
-  // Guardar en Supabase
   const [saving, setSaving] = useState(false);
   async function saveDay() {
     try {
@@ -224,7 +246,7 @@ export default function FinanceDailyPage() {
       const dayRow = {
         day,
         cash_mxn: Number(cash || 0),
-        cards_mxn: Number(cards || 0), // depositado HOY en Banamex
+        cards_mxn: Number(cards || 0),
         client_deposits_mxn: Number(clientDeps || 0),
         vouchers_mxn: Number(vouchers || 0),
         card_fees_mxn: Number(cardFees || 0),
@@ -252,20 +274,31 @@ export default function FinanceDailyPage() {
       const newId = up!.id as string;
       setDayId(newId);
 
-      const lineRows = lines.map(l => ({
-        day_id: newId,
-        family_key: l.family_key,
-        sales_mxn: +Number(l.sales || 0).toFixed(2),
-        factor: +fixFactor(l.factor).toFixed(4),
-        providers_mxn: +l.providers.toFixed(2),
-        go_base_mxn: +l.go_base.toFixed(2),
-      }));
+      // ✅ Factor a guardar: viene del INPUT (texto) -> number -> fixFactor -> toFixed(4)
+      const fcNum = fixFactor(isFinite(parseFactorInput(fCInput)) ? parseFactorInput(fCInput) : 1.7);
+      const fcomNum = fixFactor(isFinite(parseFactorInput(fComInput)) ? parseFactorInput(fComInput) : 1.7);
+      const fimpNum = fixFactor(isFinite(parseFactorInput(fImpInput)) ? parseFactorInput(fImpInput) : 1.7);
+
+      const lineRows = lines.map(l => {
+        let factorToSave = l.factor;
+        if (l.family_key === 'CARTUCHOS') factorToSave = fcNum;
+        if (l.family_key === 'COMERCIALES') factorToSave = fcomNum;
+        if (l.family_key === 'IMPORTADOS') factorToSave = fimpNum;
+
+        return {
+          day_id: newId,
+          family_key: l.family_key,
+          sales_mxn: +Number(l.sales || 0).toFixed(2),
+          factor: +fixFactor(factorToSave).toFixed(4),
+          providers_mxn: +l.providers.toFixed(2),
+          go_base_mxn: +l.go_base.toFixed(2),
+        };
+      });
 
       await supabase.from('finance_day_lines').delete().eq('day_id', newId);
       const { error: e2 } = await supabase.from('finance_day_lines').insert(lineRows);
       if (e2) throw e2;
 
-      // 🔄 Recargar lo guardado
       await loadDayData(day);
 
       setMsg('✅ Corte guardado.');
@@ -277,7 +310,6 @@ export default function FinanceDailyPage() {
     }
   }
 
-  // Eliminar corte del día
   const [deleting, setDeleting] = useState(false);
   async function deleteDay() {
     if (!dayId) return;
@@ -287,7 +319,6 @@ export default function FinanceDailyPage() {
     try {
       setDeleting(true);
       setMsg('');
-      // Borramos la fila principal; las líneas se van por ON DELETE CASCADE
       const { error } = await supabase
         .from('finance_days')
         .delete()
@@ -372,13 +403,14 @@ export default function FinanceDailyPage() {
                 <input className="w-32 border rounded px-2 py-1 text-right" value={salesC} onChange={setNum(setSalesC)} />
               </td>
 
-              {/* ✅ Factor como texto + inputMode decimal */}
+              {/* ✅ FIX: factor editable sin romper el tecleo */}
               <td className="p-2 text-right">
                 <input
                   className="w-24 border rounded px-2 py-1 text-right"
                   inputMode="decimal"
                   value={fCInput}
-                  onChange={(e) => setFCInput(e.target.value)}
+                  onFocus={selectAllOnFocus}
+                  onChange={(e) => setFCInput(sanitizeFactorText(e.target.value))}
                   onBlur={() => setFCInput(normalizeFactorText(fCInput))}
                 />
               </td>
@@ -398,7 +430,8 @@ export default function FinanceDailyPage() {
                   className="w-24 border rounded px-2 py-1 text-right"
                   inputMode="decimal"
                   value={fComInput}
-                  onChange={(e) => setFComInput(e.target.value)}
+                  onFocus={selectAllOnFocus}
+                  onChange={(e) => setFComInput(sanitizeFactorText(e.target.value))}
                   onBlur={() => setFComInput(normalizeFactorText(fComInput))}
                 />
               </td>
@@ -418,7 +451,8 @@ export default function FinanceDailyPage() {
                   className="w-24 border rounded px-2 py-1 text-right"
                   inputMode="decimal"
                   value={fImpInput}
-                  onChange={(e) => setFImpInput(e.target.value)}
+                  onFocus={selectAllOnFocus}
+                  onChange={(e) => setFImpInput(sanitizeFactorText(e.target.value))}
                   onBlur={() => setFImpInput(normalizeFactorText(fImpInput))}
                 />
               </td>
