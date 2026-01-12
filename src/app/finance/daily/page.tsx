@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
 import { supabase } from '@/lib/supabase';
 
 type Family = { key: 'CARTUCHOS' | 'COMERCIALES' | 'IMPORTADOS'; name: string; factor: number };
@@ -10,13 +10,39 @@ function toISODateLocal(d: Date) {
   const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
 }
+
 // 170 -> 1.70 ; 1.7 -> 1.70 ; guarda normalizado
 function fixFactor(x: number) {
   const v = Number(x || 0);
   if (!isFinite(v) || v <= 0) return 1.7;
   return v > 10 ? v / 100 : v;
 }
+
 const mxn = (n: number) => Number(n || 0).toLocaleString('es-MX', { style: 'currency', currency: 'MXN' });
+
+/**
+ * Permite que el usuario escriba decimales sin que React “se coma” el punto.
+ * - Acepta "1.", "1.7", "1,7"
+ * - Solo convierte a número para cálculos/guardar
+ */
+function parseFactorInput(text: string) {
+  const t = (text ?? '').trim().replace(',', '.');
+  // Si está vacío o es solo ".", devolvemos NaN para no romper el tecleo
+  if (!t || t === '.') return NaN;
+  return Number(t);
+}
+
+/**
+ * Normaliza el texto del factor al salir del campo:
+ * - Si puso 170 -> lo deja como "1.7000"
+ * - Si puso 1.7 -> "1.7000"
+ * - Si está inválido -> "1.7000"
+ */
+function normalizeFactorText(text: string) {
+  const n = parseFactorInput(text);
+  const fixed = fixFactor(isFinite(n) ? n : 1.7);
+  return fixed.toFixed(4); // puedes cambiar a 2 si quieres (ej. 1.70)
+}
 
 export default function FinanceDailyPage() {
   // Fecha del corte (default: hoy local)
@@ -44,10 +70,10 @@ export default function FinanceDailyPage() {
   const [salesCom, setSalesCom] = useState<number>(0);
   const [salesImp, setSalesImp] = useState<number>(0);
 
-  // Factores editables (normalizados)
-  const [fC, setFC] = useState<number>(1.70);
-  const [fCom, setFCom] = useState<number>(1.82);
-  const [fImp, setFImp] = useState<number>(1.53);
+  // ✅ Factores editables como TEXTO (para poder escribir decimales sin que se borren)
+  const [fCInput, setFCInput] = useState<string>('1.7000');
+  const [fComInput, setFComInput] = useState<string>('1.8200');
+  const [fImpInput, setFImpInput] = useState<string>('1.5300');
 
   useEffect(() => {
     (async () => {
@@ -65,9 +91,9 @@ export default function FinanceDailyPage() {
         const fams = (data || []) as Family[];
         setFamilies(fams);
         const map = new Map(fams.map(f => [f.key, f.factor]));
-        if (map.has('CARTUCHOS')) setFC(fixFactor(Number(map.get('CARTUCHOS'))));
-        if (map.has('COMERCIALES')) setFCom(fixFactor(Number(map.get('COMERCIALES'))));
-        if (map.has('IMPORTADOS')) setFImp(fixFactor(Number(map.get('IMPORTADOS'))));
+        if (map.has('CARTUCHOS')) setFCInput(fixFactor(Number(map.get('CARTUCHOS'))).toFixed(4));
+        if (map.has('COMERCIALES')) setFComInput(fixFactor(Number(map.get('COMERCIALES'))).toFixed(4));
+        if (map.has('IMPORTADOS')) setFImpInput(fixFactor(Number(map.get('IMPORTADOS'))).toFixed(4));
       }
       setLoading(false);
     })();
@@ -75,16 +101,21 @@ export default function FinanceDailyPage() {
 
   // Cálculos por familia
   const lines: Line[] = useMemo(() => {
+    const fCNum = fixFactor(parseFactorInput(fCInput));
+    const fComNum = fixFactor(parseFactorInput(fComInput));
+    const fImpNum = fixFactor(parseFactorInput(fImpInput));
+
     const L: Line[] = [
-      { family_key: 'CARTUCHOS',   sales: salesC,   factor: fixFactor(fC),   providers: 0, go_base: 0 },
-      { family_key: 'COMERCIALES', sales: salesCom, factor: fixFactor(fCom), providers: 0, go_base: 0 },
-      { family_key: 'IMPORTADOS',  sales: salesImp, factor: fixFactor(fImp), providers: 0, go_base: 0 },
+      { family_key: 'CARTUCHOS',   sales: salesC,   factor: fCNum,   providers: 0, go_base: 0 },
+      { family_key: 'COMERCIALES', sales: salesCom, factor: fComNum, providers: 0, go_base: 0 },
+      { family_key: 'IMPORTADOS',  sales: salesImp, factor: fImpNum, providers: 0, go_base: 0 },
     ].map(l => {
-      const providers = (Number(l.sales || 0)) / (fixFactor(l.factor) || 1);
+      const providers = (Number(l.sales || 0)) / (l.factor || 1);
       return { ...l, providers, go_base: Number(l.sales || 0) - providers };
     });
+
     return L;
-  }, [salesC, salesCom, salesImp, fC, fCom, fImp]);
+  }, [salesC, salesCom, salesImp, fCInput, fComInput, fImpInput]);
 
   const totals = useMemo(() => {
     const providersTotal = lines.reduce((s, r) => s + r.providers, 0);
@@ -171,9 +202,9 @@ export default function FinanceDailyPage() {
       setSalesCom(Number(lcom?.sales_mxn || 0));
       setSalesImp(Number(lim?.sales_mxn || 0));
 
-      if (lc?.factor != null) setFC(fixFactor(Number(lc.factor)));
-      if (lcom?.factor != null) setFCom(fixFactor(Number(lcom.factor)));
-      if (lim?.factor != null) setFImp(fixFactor(Number(lim.factor)));
+      if (lc?.factor != null) setFCInput(fixFactor(Number(lc.factor)).toFixed(4));
+      if (lcom?.factor != null) setFComInput(fixFactor(Number(lcom.factor)).toFixed(4));
+      if (lim?.factor != null) setFImpInput(fixFactor(Number(lim.factor)).toFixed(4));
     } catch (e) {
       console.error('loadDayData error', e);
       setMsg('No se pudo cargar el corte de ese día.');
@@ -274,8 +305,8 @@ export default function FinanceDailyPage() {
     }
   }
 
-  const setNum = (fn: (n: number)=>void) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    fn(Number(e.target.value.replace(',', '.')) || 0);
+  const setNum = (fn: (n: number)=>void) => (e: ChangeEvent<HTMLInputElement>) =>
+    fn(Number((e.target.value ?? '').replace(',', '.')) || 0);
 
   return (
     <div className="max-w-6xl mx-auto p-4">
@@ -337,25 +368,65 @@ export default function FinanceDailyPage() {
           <tbody>
             <tr className="border-t">
               <td className="p-2">Cartuchos</td>
-              <td className="p-2 text-right"><input className="w-32 border rounded px-2 py-1 text-right" value={salesC} onChange={setNum(setSalesC)} /></td>
-              <td className="p-2 text-right"><input className="w-24 border rounded px-2 py-1 text-right" value={fC} onChange={setNum(v => setFC(fixFactor(v)))} /></td>
+              <td className="p-2 text-right">
+                <input className="w-32 border rounded px-2 py-1 text-right" value={salesC} onChange={setNum(setSalesC)} />
+              </td>
+
+              {/* ✅ Factor como texto + inputMode decimal */}
+              <td className="p-2 text-right">
+                <input
+                  className="w-24 border rounded px-2 py-1 text-right"
+                  inputMode="decimal"
+                  value={fCInput}
+                  onChange={(e) => setFCInput(e.target.value)}
+                  onBlur={() => setFCInput(normalizeFactorText(fCInput))}
+                />
+              </td>
+
               <td className="p-2 text-right">{mxn(lines[0]?.providers || 0)}</td>
               <td className="p-2 text-right">{mxn(lines[0]?.go_base || 0)}</td>
             </tr>
+
             <tr className="border-t">
               <td className="p-2">Comerciales</td>
-              <td className="p-2 text-right"><input className="w-32 border rounded px-2 py-1 text-right" value={salesCom} onChange={setNum(setSalesCom)} /></td>
-              <td className="p-2 text-right"><input className="w-24 border rounded px-2 py-1 text-right" value={fCom} onChange={setNum(v => setFCom(fixFactor(v)))} /></td>
+              <td className="p-2 text-right">
+                <input className="w-32 border rounded px-2 py-1 text-right" value={salesCom} onChange={setNum(setSalesCom)} />
+              </td>
+
+              <td className="p-2 text-right">
+                <input
+                  className="w-24 border rounded px-2 py-1 text-right"
+                  inputMode="decimal"
+                  value={fComInput}
+                  onChange={(e) => setFComInput(e.target.value)}
+                  onBlur={() => setFComInput(normalizeFactorText(fComInput))}
+                />
+              </td>
+
               <td className="p-2 text-right">{mxn(lines[1]?.providers || 0)}</td>
               <td className="p-2 text-right">{mxn(lines[1]?.go_base || 0)}</td>
             </tr>
+
             <tr className="border-t">
               <td className="p-2">Importados</td>
-              <td className="p-2 text-right"><input className="w-32 border rounded px-2 py-1 text-right" value={salesImp} onChange={setNum(setSalesImp)} /></td>
-              <td className="p-2 text-right"><input className="w-24 border rounded px-2 py-1 text-right" value={fImp} onChange={setNum(v => setFImp(fixFactor(v)))} /></td>
+              <td className="p-2 text-right">
+                <input className="w-32 border rounded px-2 py-1 text-right" value={salesImp} onChange={setNum(setSalesImp)} />
+              </td>
+
+              <td className="p-2 text-right">
+                <input
+                  className="w-24 border rounded px-2 py-1 text-right"
+                  inputMode="decimal"
+                  value={fImpInput}
+                  onChange={(e) => setFImpInput(e.target.value)}
+                  onBlur={() => setFImpInput(normalizeFactorText(fImpInput))}
+                />
+              </td>
+
               <td className="p-2 text-right">{mxn(lines[2]?.providers || 0)}</td>
               <td className="p-2 text-right">{mxn(lines[2]?.go_base || 0)}</td>
             </tr>
+
             <tr className="border-t bg-gray-50 font-semibold">
               <td className="p-2">Totales</td>
               <td className="p-2 text-right">{mxn(Number(salesC)+Number(salesCom)+Number(salesImp))}</td>
@@ -432,7 +503,6 @@ export default function FinanceDailyPage() {
             {saving ? 'Guardando…' : 'Guardar corte'}
           </button>
 
-          {/* Botón de eliminar: solo si existe corte para este día */}
           <button
             onClick={deleteDay}
             disabled={!dayId || saving || deleting}
