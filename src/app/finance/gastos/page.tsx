@@ -19,6 +19,9 @@ const CATEGORIES = [
   { key: 'IMPUESTOS_SIMPLE', label: 'IMPUESTOS' }, // ← NUEVA SECCIÓN SOLICITADA
   { key: 'IMSS_INFONAVIT',   label: 'PAGO DE IMSS / INFONAVIT' },
   { key: 'JALC',             label: 'JALC' },
+
+  // ✅ NUEVA OPCIÓN SOLICITADA
+  { key: 'ABONO_FONDO_BBVA_CREDITO', label: 'ABONO AL FONDO BBVA PARA CRÉDITO BBVA' },
 ] as const;
 
 type CategoryKey = typeof CATEGORIES[number]['key'];
@@ -379,7 +382,7 @@ export default function ExpensesPage() {
           });
         });
         wsPend.getColumn('exp_date').numFmt = dateFmt;
-        ['amount','paid_amount','saldo'].forEach(k => (wsPend.getColumn(k).numFmt = currencyFmt));
+        ['amount','paid_amount','saldo'].forEach(k => (wsPend.getColumn(k as any).numFmt = currencyFmt));
 
         const wsPaid = wb.addWorksheet(`${cat.label.substring(0, 28)} (Pag.)`);
         wsPaid.columns = [
@@ -409,7 +412,7 @@ export default function ExpensesPage() {
         });
         wsPaid.getColumn('exp_date').numFmt = dateFmt;
         wsPaid.getColumn('paid_date').numFmt = dateFmt;
-        ['amount','paid_amount'].forEach(k => (wsPaid.getColumn(k).numFmt = currencyFmt));
+        ['amount','paid_amount'].forEach(k => (wsPaid.getColumn(k as any).numFmt = currencyFmt));
       }
 
       const buf = await wb.xlsx.writeBuffer();
